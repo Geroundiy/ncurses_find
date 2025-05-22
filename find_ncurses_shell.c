@@ -70,15 +70,16 @@ void init_ui() {
     noecho();
     keypad(stdscr, TRUE);
     start_color();
-    init_pair(CP_DIR,    COLOR_BLUE,   -1);
-    init_pair(CP_EXEC,   COLOR_GREEN,  -1);
-    init_pair(CP_FILTER, COLOR_YELLOW, -1);
+    init_pair(CP_DIR,    COLOR_BLUE,   COLOR_BLACK);
+    init_pair(CP_EXEC,   COLOR_GREEN,  COLOR_BLACK);
+    init_pair(CP_FILTER, COLOR_YELLOW, COLOR_BLACK);
     getmaxyx(stdscr, term_height, term_width);
     win_list  = newwin(term_height - 3, term_width, 0, 0);
     win_input = newwin(3, term_width, term_height - 3, 0);
     box(win_list, 0, 0);
     box(win_input, 0, 0);
     signal(SIGWINCH, resize_handler);
+    keypad(win_list, TRUE);
 }
 
 void show_help() {
@@ -92,11 +93,11 @@ void show_help() {
         " n          : сбросить фильтр",
         " c          : новый поиск",
         " q          : выход",
-        " ↑/↓        : прокрутка результата",
+        " ↑/↓        : прокрутка результатов",
         " Нажмите любую клавишу...",
         NULL
     };
-    for (int i = 0; help_lines[i]; ++i) {
+    for (int i = 0; help_lines[i] != NULL; ++i) {
         mvwprintw(win_list, i + 1, 2, "%s", help_lines[i]);
     }
     wrefresh(win_list);
@@ -108,20 +109,20 @@ int match_filter(const char *s) {
     return strstr(s, filter_buf) != NULL;
 }
 
-void draw_list(LineBuffer *buf, size_t *p_shown, size_t *p_total_matching) {
+void draw_list(LineBuffer *b, size_t *p_shown, size_t *p_total_matching) {
     werase(win_list);
     box(win_list, 0, 0);
     size_t shown = 0;
     size_t total_matching = 0;
     int max_lines = term_height - 5;
     size_t skipped = 0;
-    for (size_t i = 0; i < buf->size; ++i) {
-        if (match_filter(buf->data[i])) {
+    for (size_t i = 0; i < b->size; ++i) {
+        if (match_filter(b->data[i])) {
             total_matching++;
             if (skipped < offset) {
                 skipped++;
             } else if (shown < (size_t)max_lines) {
-                const char *line = buf->data[i];
+                const char *line = b->data[i];
                 int y = shown + 1, x = 2;
                 struct stat st;
                 int color = 0;
@@ -164,8 +165,8 @@ void draw_list(LineBuffer *buf, size_t *p_shown, size_t *p_total_matching) {
     *p_shown = shown;
     *p_total_matching = total_matching;
     mvwprintw(win_list, term_height - 5, 2,
-        "[%zu/%zu] /:filter n:clear H:help c:new q:quit ↑/↓:scroll",
-        shown, total_matching);
+        "[%zu/%zu] /:filter n:clear H:help c:new q:quit ↑/↓:scroll (offset=%zu)",
+        shown, total_matching, offset);
     wrefresh(win_list);
 }
 
@@ -189,16 +190,16 @@ void prompt_input(const char *prompt, char *buf_in) {
     }
 }
 
-void run_find(LineBuffer *buf, const char *pattern) {
+void run_find(LineBuffer *b, const char *pattern) {
     char cmd[MAX_CMD_LEN + 64];
     snprintf(cmd, sizeof(cmd),
-        "find / -iname \"*%s*\" -type f -o -type d 2>/dev/null",
+        "find / \\( -type f -o -type d \\) -iname \"*%s*\" 2>/dev/null",
         pattern);
     FILE *fp = popen(cmd, "r");
-    free_buffer(buf);
-    init_buffer(buf);
+    free_buffer(b);
+    init_buffer(b);
     if (!fp) {
-        add_line(buf, "Ошибка: невозможно запустить find");
+        add_line(b, "Error: unable to run find");
     } else {
         char line[MAX_LINE_LEN];
         while (fgets(line, sizeof(line), fp)) {
@@ -212,7 +213,7 @@ void run_find(LineBuffer *buf, const char *pattern) {
             }
             clean_line[j] = 0;
             if (j > 0) {
-                add_line(buf, clean_line);
+                add_line(b, clean_line);
             }
             free(clean_line);
         }
@@ -224,7 +225,14 @@ void run_find(LineBuffer *buf, const char *pattern) {
 int main() {
     LineBuffer buf;
 
-    setlocale(LC_ALL, "");
+    setlocale(LC_ALL, "ru_RU.UTF-8");
+    if (!initscr()) {
+        fprintf(stderr, "Error initializing ncurses\n");
+        return 1;
+    }
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
     init_ui();
     init_buffer(&buf);
     show_help();
@@ -241,6 +249,7 @@ int main() {
             size_t shown, total_matching;
             draw_list(&buf, &shown, &total_matching);
             int ch = wgetch(win_list);
+            wrefresh(win_input);
 
             if (ch == 'h' || ch == 'H') {
                 show_help();
